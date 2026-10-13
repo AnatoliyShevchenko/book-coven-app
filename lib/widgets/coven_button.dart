@@ -186,3 +186,88 @@ class _DividerPainter extends CustomPainter {
   @override
   bool shouldRepaint(_DividerPainter old) => old.color != color;
 }
+
+Paint _iconStroke(Color color, double width) => Paint()
+  ..color = color
+  ..style = PaintingStyle.stroke
+  ..strokeWidth = width
+  ..strokeCap = StrokeCap.round
+  ..strokeJoin = StrokeJoin.round;
+
+/// Круговая стрелка «обновить» 24×24, линия 2.
+class RetryIcon extends StatelessWidget {
+  const RetryIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    return CustomPaint(
+      size: Size.square(theme.size ?? 20),
+      painter: _RetryPainter(theme.color ?? CovenColors.text),
+    );
+  }
+}
+
+class _RetryPainter extends CustomPainter {
+  _RetryPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final k = size.width / 24;
+    canvas.scale(k);
+    final p = _iconStroke(color, 2);
+    // Дуга окружности r = 8 от правой точки почти до верхнего правого угла.
+    canvas.drawPath(
+      Path()
+        ..moveTo(20, 12)
+        ..arcToPoint(const Offset(17.66, 6.34), radius: const Radius.circular(8), largeArc: true),
+      p,
+    );
+    canvas.drawPath(Path()..moveTo(20, 4)..lineTo(20, 9)..lineTo(15, 9), p);
+  }
+
+  @override
+  bool shouldRepaint(_RetryPainter old) => old.color != color;
+}
+
+/// Перечёркнутый значок Wi-Fi 24×24.
+class WifiOffIcon extends StatelessWidget {
+  const WifiOffIcon({super.key, this.size, this.color});
+
+  final double? size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    return CustomPaint(
+      size: Size.square(size ?? theme.size ?? 20),
+      painter: _WifiOffPainter(color ?? theme.color ?? CovenColors.text),
+    );
+  }
+}
+
+class _WifiOffPainter extends CustomPainter {
+  _WifiOffPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24);
+    final p = _iconStroke(color, 2);
+    // Три дуги с разрывом там, где их пересекает диагональ.
+    canvas.drawPath(Path()..moveTo(2, 8.8)..arcToPoint(const Offset(6.2, 6.2), radius: const Radius.circular(15)), p);
+    canvas.drawPath(Path()..moveTo(9.5, 5.2)..arcToPoint(const Offset(22, 8.8), radius: const Radius.circular(15)), p);
+    canvas.drawPath(Path()..moveTo(5, 12.5)..arcToPoint(const Offset(8.4, 10.6), radius: const Radius.circular(10)), p);
+    canvas.drawPath(Path()..moveTo(14.7, 10.8)..arcToPoint(const Offset(19, 12.5), radius: const Radius.circular(10)), p);
+    canvas.drawPath(Path()..moveTo(8.5, 16)..arcToPoint(const Offset(15.5, 16), radius: const Radius.circular(5)), p);
+    canvas.drawCircle(const Offset(12, 19.5), 1, Paint()..color = color);
+    canvas.drawLine(const Offset(3, 3), const Offset(21, 21), p);
+  }
+
+  @override
+  bool shouldRepaint(_WifiOffPainter old) => old.color != color;
+}

@@ -10,6 +10,8 @@ import '../widgets/coven_button.dart';
 import '../widgets/effects.dart';
 import '../widgets/reveal_overlay.dart';
 import '../widgets/tarot_card.dart';
+import 'offline_screen.dart';
+import '../widgets/cache_notice.dart';
 
 const _gap = 14.0;
 const _dealStep = 30;
@@ -20,10 +22,12 @@ const _winnerDelay = Duration(milliseconds: 1100);
 /// Расклад: книги лежат рубашкой вверх, их открывают по одной.
 /// Открытая карта выбывает, последняя оставшаяся — книга, которую читает ковен.
 class SpreadScreen extends StatefulWidget {
-  const SpreadScreen({super.key, required this.repository, required this.books, this.loadError});
+  const SpreadScreen({super.key, required this.repository, this.initial, this.loadError});
 
   final BookRepository repository;
-  final List<Book> books;
+
+  /// Список, загруженный на сплэше. Нет его — нет ни сети, ни кэша.
+  final BookList? initial;
   final Object? loadError;
 
   @override
@@ -33,7 +37,9 @@ class SpreadScreen extends StatefulWidget {
 class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMixin {
   final _random = math.Random();
 
-  late List<Book> _books = widget.books;
+  late List<Book> _books = widget.initial?.books ?? const [];
+  late bool _fromCache = widget.initial?.fromCache ?? false;
+  late DateTime? _savedAt = widget.initial?.savedAt;
   late Object? _error = widget.loadError;
   late List<int> _order = _shuffled();
 
@@ -43,10 +49,13 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
   bool _revealClosed = false;
   bool _loading = false;
   bool _fetching = false;
+
+  /// Идёт проверка сети по кнопке «Обновить» или «Попробовать снова».
+  bool _checking = false;
   int _round = 0;
 
-  /// Свежий список из таблицы, пришедший во время перетасовки. Применяется при раздаче.
-  List<Book>? _pending;
+  /// Свежий список, пришедший во время перетасовки или посреди расклада. Применяется при раздаче.
+  BookList? _pending;
 
   late final _deal = AnimationController(vsync: this, duration: _dealTotal);
   late final _gather = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
@@ -57,6 +66,7 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
 
   int get _left => _books.length - _out.length;
   bool get _shuffling => _gather.isAnimating || _dealTimer != null;
+  bool get _offline => _books.isEmpty && _error != null;
 
   @override
   void initState() {
@@ -97,20 +107,7 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
     _dealTimer?.cancel();
     _pending = null;
     _fetching = true;
-    widget.repository.load().then((books) {
-      _fetching = false;
-      _pending = books;
-      // Пустой расклад ждал только загрузки: раздаём сразу, не дожидаясь следующей перетасовки.
-      if (_books.isEmpty && _dealTimer == null && mounted) _dealNow();
-    }, onError: (Object e) {
-      _fetching = false;
-      if (_books.isEmpty && mounted) {
-        setState(() {
-          _error = e;
-          _loading = false;
-        });
-      }
-    });
+    _fetchForDeal();
 
     setState(() {
       _winner = null;
@@ -121,17 +118,31 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
     });
   }
 
+  Future<void> _fetchForDeal() async {
+    try {
+      final list = await widget.repository.load();
+      _fetching = false;
+      _pending = list;
+      // Пустой расклад ждал только загрузки: раздаём сразу, не дожидаясь следующей перетасовки.
+      if (_books.isEmpty && _dealTimer == null && mounted) _dealNow();
+    } catch (e) {
+      _fetching = false;
+      if (_books.isEmpty && mounted) {
+        setState(() {
+          _error = e;
+          _loading = false;
+        });
+      }
+    }
+  }
+
   void _dealNow() {
     _dealTimer?.cancel();
     _dealTimer = null;
     if (!mounted) return;
     if (_books.isEmpty && _pending == null && _fetching) return;
     setState(() {
-      if (_pending != null) {
-        _books = _pending!;
-        _error = null;
-        _pending = null;
-      }
+      if (_pending != null) _apply(_pending!);
       _loading = false;
       _out.clear();
       _winner = null;
@@ -143,11 +154,62 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
     });
   }
 
+  void _apply(BookList list) {
+    _books = list.books;
+    _fromCache = list.fromCache;
+    _savedAt = list.savedAt;
+    _error = null;
+    _pending = null;
+  }
+
+  /// Кнопка «Обновить» на плашке кэша и «Попробовать снова» на экране без сети.
+  /// Если сеть появилась, а расклад ещё не начат, раздаём свежий список сразу;
+  /// посреди расклада он подождёт следующей перетасовки.
+  Future<void> _checkNetwork() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    BookList? list;
+    try {
+      // Проверка не должна мелькнуть: даём фазам луны хотя бы секунду.
+      final results = await Future.wait([
+        widget.repository.load(),
+        Future<void>.delayed(const Duration(seconds: 1)),
+      ]);
+      list = results.first as BookList;
+    } catch (_) {
+      list = null;
+    }
+    if (!mounted) return;
+    setState(() => _checking = false);
+    if (list == null || list.fromCache) return;
+
+    final untouched = _out.isEmpty && _winner == null;
+    if (_books.isEmpty || untouched) {
+      _pending = list;
+      _dealNow();
+    } else {
+      setState(() {
+        _pending = list;
+        _fromCache = false;
+        _savedAt = list!.savedAt;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_offline) {
+      return Scaffold(body: OfflineScreen(checking: _checking, onRetry: _checkNetwork));
+    }
+
     final reduce = MediaQuery.disableAnimationsOf(context);
     final compact = isCompact(context);
+    final landscape = MediaQuery.orientationOf(context) == Orientation.landscape;
     final gap = compact ? 16.0 : 28.0;
+    final cache = _fromCache && _books.isNotEmpty
+        ? CacheNotice(savedAt: _savedAt, checking: _checking, onRefresh: _checkNetwork, inline: landscape)
+        : null;
+
     return Scaffold(
       body: Stack(
         children: [
@@ -157,7 +219,14 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
               padding: EdgeInsets.all(compact ? 24 : 40),
               child: Column(
                 children: [
-                  _Header(left: _left, total: _books.length, compact: compact),
+                  _Header(
+                    left: _left,
+                    total: _books.length,
+                    compact: compact,
+                    notice: landscape ? cache : null,
+                  ),
+                  // В портрете плашка кэша идёт отдельной строкой под шапкой.
+                  if (cache != null && !landscape) ...[SizedBox(height: gap - 8), cache],
                   SizedBox(height: gap),
                   Expanded(child: _books.isEmpty ? _emptyState() : _grid(reduce)),
                   SizedBox(height: gap),
@@ -275,32 +344,32 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
     );
   }
 
+  /// Таблица загрузилась, но непрочитанных книг в ней нет (без сети и кэша показывается [OfflineScreen]).
   Widget _emptyState() {
-    final failed = _error != null;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            _loading ? 'Тасуем колоду…' : (failed ? 'Не удалось загрузить книги' : 'В таблице нет непрочитанных книг'),
+            _loading ? 'Тасуем колоду…' : 'В таблице нет непрочитанных книг',
             textAlign: TextAlign.center,
             style: CovenText.title(),
           ),
-          const SizedBox(height: 12),
-          if (!_loading)
+          if (!_loading) ...[
+            const SizedBox(height: 12),
             Text(
-              failed
-                  ? 'Проверьте интернет и попробуйте ещё раз.'
-                  : 'Добавьте книги в таблицу или очистите колонку Read.',
+              'Добавьте книги в таблицу или очистите колонку Read.',
               textAlign: TextAlign.center,
               style: CovenText.body(),
             ),
-          const SizedBox(height: 24),
-          if (!_loading) CovenButton(label: 'Повторить', icon: const ShuffleIcon(), onPressed: _reshuffle),
+            const SizedBox(height: 24),
+            CovenButton(label: 'Обновить', icon: const RetryIcon(), onPressed: _reshuffle),
+          ],
         ],
       ),
     );
   }
+
 
   Widget _footer(bool compact) {
     final Widget content;
@@ -407,11 +476,14 @@ class _SpreadScreenState extends State<SpreadScreen> with TickerProviderStateMix
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.left, required this.total, required this.compact});
+  const _Header({required this.left, required this.total, required this.compact, this.notice});
 
   final int left;
   final int total;
   final bool compact;
+
+  /// Пилюля «Офлайн» в горизонтальной ориентации, слева от счётчика.
+  final Widget? notice;
 
   @override
   Widget build(BuildContext context) {
@@ -443,6 +515,10 @@ class _Header extends StatelessWidget {
             ],
           ),
         ),
+        if (notice != null) ...[
+          Padding(padding: const EdgeInsets.only(bottom: 2), child: notice),
+          const SizedBox(width: 24),
+        ],
         if (total > 0)
           Padding(
             padding: const EdgeInsets.only(bottom: 2),

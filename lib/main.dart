@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'data/book.dart';
 import 'data/book_repository.dart';
 import 'screens/splash_screen.dart';
 import 'screens/spread_screen.dart';
@@ -45,16 +44,21 @@ class _BootState extends State<_Boot> {
   }
 
   Future<void> _start() async {
-    List<Book> books = const [];
+    BookList? books;
     Object? error;
-    await Future.wait([
-      Future<void>.delayed(splashMinDuration),
-      _repository.load().then((b) => books = b, onError: (Object e) => error = e),
-    ]);
+    Future<void> load() async {
+      try {
+        books = await _repository.load();
+      } catch (e) {
+        error = e;
+      }
+    }
+
+    await Future.wait([Future<void>.delayed(splashMinDuration), load()]);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(PageRouteBuilder<void>(
       transitionDuration: const Duration(milliseconds: 400),
-      pageBuilder: (context, _, _) => SpreadScreen(repository: _repository, books: books, loadError: error),
+      pageBuilder: (context, _, _) => SpreadScreen(repository: _repository, initial: books, loadError: error),
       transitionsBuilder: (context, animation, _, child) => FadeTransition(opacity: animation, child: child),
     ));
   }

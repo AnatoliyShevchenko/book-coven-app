@@ -11,7 +11,21 @@ const _sheetId = '1SYZCdkQhV02JvKaCdWHfXz1aO2o3q-NgBhhpXkzi9W4';
 final _csvUrl = Uri.parse('https://docs.google.com/spreadsheets/d/$_sheetId/export?format=csv');
 
 const _cacheKey = 'books_csv';
+const _savedAtKey = 'books_saved_at';
 const _timeout = Duration(seconds: 10);
+
+/// Список книг и откуда он взят.
+class BookList {
+  const BookList(this.books, {required this.savedAt, this.fromCache = false});
+
+  final List<Book> books;
+
+  /// Когда список последний раз пришёл из таблицы.
+  final DateTime? savedAt;
+
+  /// Сети нет, показываем сохранённую копию.
+  final bool fromCache;
+}
 
 class BookRepository {
   BookRepository({http.Client? client}) : _client = client ?? http.Client();
@@ -20,7 +34,7 @@ class BookRepository {
 
   /// Загружает книги из таблицы. Без сети отдаёт последний сохранённый список.
   /// Бросает исключение, только если нет ни сети, ни кэша.
-  Future<List<Book>> load() async {
+  Future<BookList> load() async {
     final prefs = await SharedPreferences.getInstance();
     try {
       final res = await _client.get(_csvUrl).timeout(_timeout);
@@ -29,12 +43,19 @@ class BookRepository {
       }
       final body = utf8.decode(res.bodyBytes);
       final books = parseBooks(body);
+      final now = DateTime.now();
       await prefs.setString(_cacheKey, body);
-      return books;
+      await prefs.setInt(_savedAtKey, now.millisecondsSinceEpoch);
+      return BookList(books, savedAt: now);
     } catch (_) {
       final cached = prefs.getString(_cacheKey);
       if (cached == null) rethrow;
-      return parseBooks(cached);
+      final savedAt = prefs.getInt(_savedAtKey);
+      return BookList(
+        parseBooks(cached),
+        savedAt: savedAt == null ? null : DateTime.fromMillisecondsSinceEpoch(savedAt),
+        fromCache: true,
+      );
     }
   }
 }
